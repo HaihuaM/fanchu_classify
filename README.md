@@ -5,6 +5,7 @@ numpy
 
 ### Usage
 python nn.py --epochs [training epochs]  --w-width [squence length] 
-$Example:$ 
+####
+Example:
 `python nn.py --epochs 1 --w-width 60`
 
