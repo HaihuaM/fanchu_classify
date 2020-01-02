@@ -4,12 +4,14 @@ import torch.nn.functional as F
 import torch.optim as optim
 from sklearn.model_selection import train_test_split
 from torch.utils import data
-import os, argparse
+import os, argparse, math
 import os.path as op
 import numpy as np
 
 class Dataset(data.Dataset):
-
+    """
+    Build a data iterator.
+    """
     def __init__(self, train_x, y):
         self.train_x = train_x
         self.y = y
@@ -22,35 +24,47 @@ class Dataset(data.Dataset):
         y = self.y[index]
         return X,y
 
+class Flatten(nn.Module):
+    """
+    A flatten layer
+    """
+    def forward(self, input):
+        return input.view(input.size(0), -1)
+
 class Net(nn.Module):
 
     def __init__(self, w_width):
         super(Net, self).__init__()
-        self.classfier = nn.Sequential(
-                nn.Linear(w_width, 512, bias=False),
+
+        w_width = get_width()
+        # calculate the width of data for cnn
+        self.kernel_w = int(math.sqrt(w_width))
+
+        # Network setup
+        # conv -> batch normalization -> conv -> max pool -> conv -> batch normalization -> fc
+        self.classfier_cnn = nn.Sequential(
+                nn.Conv2d(1, 16, 1),
+                nn.BatchNorm2d(16),
+                nn.Conv2d(16, 16, 2),
+                nn.MaxPool2d(2, 2),
                 nn.ReLU(),
-                nn.Dropout(0.5),
-                nn.Linear(512, 512),
-                nn.BatchNorm1d(512),
-                # nn.Linear(1024, 1024),
-                # nn.BatchNorm1d(10),
-                nn.Linear(512, 10),
-                nn.BatchNorm1d(10),
-                nn.Linear(10, 10),
-                # nn.BatchNorm1d(10),
+                nn.Conv2d(16, 9, 2),
+                nn.BatchNorm2d(9),
+                Flatten(),
+                nn.Linear(9, 2),
                 nn.ReLU(),
-                nn.Dropout(0.5),
-                nn.Linear(10, 2)
                 )
 
     def forward(self, x):
-        # import pdb; pdb.set_trace();
+        # Observered from the data to see the typically max and min
         feat_max = x.new_tensor([3717])
         feat_min = x.new_tensor([1329])
-
+        # normalize the data to 1
         x = (x - feat_min)/(feat_max-feat_min)
-        x = self.classfier(x)
-
+        # reshape data to [batch_siae, 1,  kernel_w, kernel_w] for conv2d
+        x = x.view(-1, 1, self.kernel_w, self.kernel_w)
+        # feed data to cnn  
+        x = self.classfier_cnn(x)
         return F.log_softmax(x, dim=1)
 
 
@@ -61,13 +75,24 @@ def train(args, model, device, params):
     # Dataloader
     train_loader = data.DataLoader(train_set, **params)
     # optimizer setup
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+    # optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001 )
     # every 25 epoch, learning degrade 50%
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=25, gamma=0.5, last_epoch=-1)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.5, last_epoch=-1)
     for epoch in range(1, args.epochs + 1):
         train_epoch(epoch, args, model, device, train_loader, optimizer)
+        # Test the model post training.
+        acc = test(args, model, device, params)
+        # Save model
+        checkpoint_dir = "checkpoints"
+        checkpoint = op.join(checkpoint_dir, 'epoch_%s_%.3f.pth'%(epoch, acc))
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(), 
+            },checkpoint)
     # update learning rate.
     scheduler.step()
+
 
 def train_epoch(epoch, args, model, device, data_loader, optimizer):
     # torch.manual_seed(args.seed)
@@ -103,11 +128,13 @@ def test_epoch(model, device, data_loader):
     print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.3f}%)\n'.format(
         test_loss, correct, len(data_loader.dataset),
         100. * correct / len(data_loader.dataset)))
+    return (correct / len(data_loader.dataset))
 
 def test(args, model, device, params):
     # torch.manual_seed(args.seed)
     test_loader = data.DataLoader(val_set, **params)
-    test_epoch(model, device, test_loader)
+    acc = test_epoch(model, device, test_loader)
+    return acc
 
 
 def set_env(w_width):
@@ -162,8 +189,8 @@ def data_extend(w_width):
 
 # Training settings
 parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
-parser.add_argument('--batch-size', type=int, default=64, metavar='N',
-                    help='input batch size for training (default: 64)')
+parser.add_argument('--batch-size', type=int, default=8192, metavar='N',
+                    help='input batch size for training (default: 2048)')
 parser.add_argument('--w-width', type=int, default=36, metavar='N',
                     help='Width for slidding windown apply on the squence data (default: 32)')
 parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
@@ -202,5 +229,3 @@ if __name__ == '__main__':
 
     train(args, model, device, params)
 
-    # Test the model post training.
-    test(args, model, device, params)
