@@ -10,6 +10,10 @@
 ![w_width](w_width.png)
 > Above is a example with w_width = 11, which is how the training data is generated. Using this slidding window to roll over all data samples to create the dataset, then split it into training and validation set at proportion of 3:1.
 
+#### Data pipeline
+![data pipeline](data_pipeline.png)
+> The feature data will first converted to 2d tensor then feed into convolution network.
+
 ## Training
 ### Usage
 `$ python nn.py --epochs [training epochs]  --w-width [squence length]`
