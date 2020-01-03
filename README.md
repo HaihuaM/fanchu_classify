@@ -14,9 +14,13 @@
 ### Usage
 `$ python nn.py --epochs [training epochs]  --w-width [squence length]`
 ####
-Example:
+**Example:**
 `$ python nn.py --epochs 20 --w-width 144`
 
+**If you have gpu:**
+`$ python nn.py --epochs 20 --w-width 144 --cuda`
+
+**Try `python nn.py --help` for more help**
 
 ## Inference
 ### Usage
