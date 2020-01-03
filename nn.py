@@ -100,7 +100,6 @@ def train_epoch(epoch, args, model, device, data_loader, optimizer):
     model.train()
     for batch_idx, (data, target) in enumerate(data_loader):
         optimizer.zero_grad()
-        # import pdb; pdb.set_trace()
         output = model(data.to(device))
         
         loss = F.nll_loss(output, target.to(device))
@@ -121,8 +120,6 @@ def test_epoch(model, device, data_loader):
             output = model(data.to(device))
             test_loss += F.nll_loss(output, target.to(device), reduction='sum').item() # sum up batch loss
             pred = output.max(1)[1] # get the index of the max log-probability
-            # import pdb; pdb.set_trace()
-            # print(torch.nonzero(pred.detach()))
             correct += pred.eq(target.to(device)).sum().item()
 
     test_loss /= len(data_loader.dataset)
@@ -132,7 +129,6 @@ def test_epoch(model, device, data_loader):
     return (correct / len(data_loader.dataset))
 
 def test(args, model, device, params):
-    # torch.manual_seed(args.seed)
     test_loader = data.DataLoader(val_set, **params)
     acc = test_epoch(model, device, test_loader)
     return acc
@@ -201,7 +197,6 @@ def build_inference_data(data_file):
     if data_file.endswith('.csv'):
         feat  = np.loadtxt(data_file, delimiter=',', usecols=(6,), skiprows=1, unpack=True)
         feat = rolling_window(feat, w_width)
-        # label = np.rint(rolling_window(label, w_width).mean(axis=1))
         return feat
     else:
         print("Error: only csv file is support.")
