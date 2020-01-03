@@ -32,6 +32,7 @@
 ### Example
 
 `$ python nn.py --inference --checkpoint checkpoints/epoch_20_0.893.pth --input fanchu_data/20190725_6008_04.csv `
+
 *Will genereate a prediction file fanchu_data/20190725_6008_04.predict.predict.csv*
 
 ### Experiment
