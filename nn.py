@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from sklearn.model_selection import train_test_split
 from torch.utils import data
-import os, argparse, math
+import os, sys, argparse, math, pickle
 import os.path as op
 import numpy as np
 
@@ -33,7 +33,7 @@ class Flatten(nn.Module):
 
 class Net(nn.Module):
 
-    def __init__(self, w_width):
+    def __init__(self):
         super(Net, self).__init__()
 
         w_width = get_width()
@@ -51,7 +51,7 @@ class Net(nn.Module):
                 nn.Conv2d(16, 9, 2),
                 nn.BatchNorm2d(9),
                 Flatten(),
-                nn.Linear(9, 2),
+                nn.Linear(w_width, 2),
                 nn.ReLU(),
                 )
 
@@ -89,6 +89,7 @@ def train(args, model, device, params):
         torch.save({
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(), 
+            'w_width': get_width(), 
             },checkpoint)
     # update learning rate.
     scheduler.step()
@@ -141,7 +142,7 @@ def set_env(w_width):
     os.environ['SQUENCE_WIDTH'] = str(w_width)
 
 def get_width():
-    return int(os.getenv('SQUENCE_WIDTH', 20))
+    return int(os.getenv('SQUENCE_WIDTH', 36))
 
 def get_data():
     w_width = get_width()
@@ -162,30 +163,80 @@ def get_data():
     return train_set, val_set
 
 
+def rolling_window(a, window):
+    shape = a.shape[:-1] + (a.shape[-1] - window + 1, window)
+    strides = a.strides + (a.strides[-1],)
+    return np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides)
+
 def data_extend(w_width):
     """
     Prepare data by slide a window on original sequence data.
     """
-    if not op.exists('data.npz'):
+    if not op.exists('data.pickle'):
         import sys
-        print("Error: data.npz not exists.")
+        print("Error: data.pickle not exists.")
         sys.exit(0)
-
-    def rolling_window(a, window):
-        shape = a.shape[:-1] + (a.shape[-1] - window + 1, window)
-        strides = a.strides + (a.strides[-1],)
-        return np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides)
         
-    data = np.load('data.npz')
-    feats = data['feats']
-    labels = data['labels']
+    with open('data.pickle', 'rb') as f:
+        data = pickle.load(f)
 
-    extend_feats = rolling_window(feats, w_width)
-    extend_labels = rolling_window(labels, w_width).mean(axis=1)
-    extend_labels = np.rint(extend_labels)
+    feats = list()
+    labels = list()
 
-    np.savez_compressed('squence_data_w%s'%w_width, feats = extend_feats, labels = extend_labels)
-    return extend_feats, extend_labels
+    for idx, feat in enumerate(data['feats']):
+        label = data['labels'][idx]
+        feat = rolling_window(feat, w_width)
+        feats.append(feat)
+        label = np.rint(rolling_window(label, w_width).mean(axis=1))
+        labels.append(label)
+
+    labels = np.concatenate(labels, axis=0)
+    feats = np.concatenate(feats, axis=0)
+
+    np.savez_compressed('squence_data_w%s'%w_width, feats = feats, labels = labels)
+    return feats, labels
+
+def build_inference_data(data_file):
+    w_width = get_width()
+    if data_file.endswith('.csv'):
+        feat  = np.loadtxt(data_file, delimiter=',', usecols=(6,), skiprows=1, unpack=True)
+        feat = rolling_window(feat, w_width)
+        # label = np.rint(rolling_window(label, w_width).mean(axis=1))
+        return feat
+    else:
+        print("Error: only csv file is support.")
+
+def inference(args, device, 
+        checkpoint, input_file):
+
+    checkpoint = torch.load(checkpoint)
+    w_width = checkpoint['w_width']
+    set_env(w_width)
+
+    model = Net().double().to(device)
+    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001 )
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+
+    feat_data = torch.from_numpy(build_inference_data(input_file))
+    out = model(feat_data.to(device))
+    pred = out.max(1)[1].to('cpu').detach().numpy()
+    file_name = input_file.replace('.csv', '.predict.csv')
+    dump_result(pred, input_file, file_name)
+
+def dump_result(pred, data_file, file_name, skiprows=1):    
+    with open(data_file, 'r') as f:
+        lines = f.readlines()[skiprows:]
+
+    for idx, l in enumerate(pred):
+        lines[idx] = lines[idx].strip('\n')
+        lines[idx] += ', %s\n' %l
+
+    content = "".join(lines)
+    with open(file_name, 'w') as f:
+        f.write(content)
+
 
 # Training settings
 parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
@@ -207,6 +258,12 @@ parser.add_argument('--log-interval', type=int, default=10, metavar='N',
                     help='how many batches to wait before logging training status')
 parser.add_argument('--cuda', action='store_true', default=False,
                     help='enables CUDA training')
+parser.add_argument('--inference', action='store_true', default=False,
+                    help='for inference the result')
+parser.add_argument('--input', 
+                    help='input csv file for inference')
+parser.add_argument('--checkpoint', 
+                    help='point the checkpoint pth')
 
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -214,13 +271,32 @@ if __name__ == '__main__':
     use_cuda = args.cuda and torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
 
-    # w_width = 50
+
+    if args.inference:
+        if args.checkpoint == None or \
+                args.input == None:
+            print("Error: Inference mode, you need input the checkpoint pth, and the data file.")
+            sys.exit(0)
+
+        if op.exists(args.checkpoint) and \
+                op.exists(args.input):
+            print("Inference the model.")
+            inference(args, device,
+                    args.checkpoint, args.input)
+            sys.exit(0)
+        else:
+            print("Error: Pleas ensure %s or %s exists"%(args.checkpoint, \
+                    args.input))
+            sys.exit(0)
+            
+    # w_width = 36
     set_env(args.w_width)
+
 
     # Prepare data.
     train_set, val_set = get_data()
 
-    model = Net(args.w_width).double().to(device)
+    model = Net().double().to(device)
 
     # Parameters
     params = {'batch_size': args.batch_size,
